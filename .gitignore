@@ -1,0 +1,31 @@
+# Compiled C/C++ files
+*.exe
+*.o
+*.obj
+*.out
+
+# Visual C++ / linker / debugging files
+*.ilk
+*.pdb
+*.idb
+
+# Build directories
+build/
+bin/
+Debug/
+Release/
+x64/
+x86/
+
+# VS Code settings
+.vscode/
+
+# Visual Studio files
+.vs/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Program-generated data
+studentExpenses.txt
