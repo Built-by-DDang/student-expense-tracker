@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <limits>
+#include <vector>
 
 using namespace std;
 
@@ -21,23 +22,64 @@ Expense addExpense()
     Expense expense;
     int year;
     int month;
-    int date;
+    int day;
     
     cout<<"Enter the year: "<<endl;
     cin>>year;
+
+while (cin.fail() || (year < 0 || year > 9999))
+    {
+            cin.clear(); 
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cout<<"Invalid input, please try again:"<<endl<<endl;
+            cin>>year;
+             continue; 
+    }
+
     cout<<endl;
     cout<<"Enter the month"<<endl;
     cin>>month;
+
+    while (cin.fail() || (month < 1 || month > 12))
+    {
+            cin.clear(); 
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cout<<"Invalid input, please try again:"<<endl<<endl;
+            cin>>month;
+             continue; 
+    }
+
     cout<<endl;
-    cout<<"Enter the date"<<endl;
-    cin>>date;
+    cout<<"Enter the DAY of the month"<<endl;
+    cin>>day;
+
+    while (cin.fail() || (day < 1 || day > 31))
+    {
+        cin.clear(); 
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout<<"Invalid input, please try again:"<<endl<<endl;
+        cin>>day;
+         continue; 
+    }
+    
     cout<<endl;
 
     string yearString = to_string(year);
     string monthString = to_string(month);
-    string dateString = to_string(date);
+    string dayString = to_string(day);
 
-    expense.date = dateString + "-" + monthString + "-" + yearString;
+    if (month < 10)
+    {
+        monthString = "0" + to_string(month);
+    }
+
+    if (day < 10)
+    {
+        dayString = "0" + to_string(day);
+    }
+
+
+    expense.date = yearString + "-" + monthString + "-" + dayString;
 
     cout<<"Enter category: "<<endl;
     getline(cin >> ws, expense.category);
@@ -49,6 +91,16 @@ Expense addExpense()
 
     cout<<"Enter amount (use negative for refunds): "<<endl;
     cin>>expense.amount;
+
+    while (cin.fail())
+    {
+        cin.clear(); 
+        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+        cout<<"Invalid input, please try again:"<<endl<<endl;
+        cin>>expense.amount;
+         continue; 
+    }
+
     cout<<endl;
     return expense;
 }
@@ -118,6 +170,8 @@ void viewExpense()
         cout<<"There is no expense history present in the file, pleae add an expense"<<endl;
         cout<<endl;
     }
+
+    cout<< "End of report. No more expenses to show."<<endl;
 
     system("pause");
     expenseFile.close();
