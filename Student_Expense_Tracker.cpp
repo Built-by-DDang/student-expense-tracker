@@ -25,6 +25,17 @@ struct Expense
     double amount = 0.0;
 };
 
+const char* const BUDGET_FILE = "studentBudgets.txt";
+const char* const BUDGET_TEMP_FILE = "studentBudgets.txt.tmp";
+const char* const BUDGET_BACKUP_FILE = "studentBudgets.txt.bak";
+
+struct Budget
+{
+    string type; // "TIMEFRAME" or "CATEGORY"
+    string name; // "WEEK", "MONTH", "YEAR", or normalized category name
+    double amount = 0.0;
+};
+
 // Clear only when moving to another screen, never while an error is being read.
 void clearScreen()
 {
@@ -106,6 +117,142 @@ bool readText(const string& prompt, string& value)
     return false;
 }
 
+// Normalize a category string to Title Case so "food", "FOOD", and "Food"
+// all become "Food".  Prevents duplicate groups from inconsistent casing.
+string normalizeCategory(const string& raw)
+{
+    string result = raw;
+    bool capitalizeNext = true;
+    for (size_t i = 0; i < result.size(); ++i)
+    {
+        unsigned char ch = static_cast<unsigned char>(result[i]);
+        if (isspace(ch))
+            capitalizeNext = true;
+        else if (capitalizeNext)
+        {
+            result[i] = static_cast<char>(toupper(ch));
+            capitalizeNext = false;
+        }
+        else
+            result[i] = static_cast<char>(tolower(ch));
+    }
+    return result;
+}
+
+// Convert a string to all lowercase for case-insensitive comparisons.
+string toLowerStr(const string& s)
+{
+    string result = s;
+    for (size_t i = 0; i < result.size(); ++i)
+        result[i] = static_cast<char>(tolower(static_cast<unsigned char>(result[i])));
+    return result;
+}
+
+// Asks a yes-or-no question.  Returns true for yes, false for no or EOF.
+bool confirmAction(const string& prompt)
+{
+    string input;
+    while (cout << prompt, getline(cin, input))
+    {
+        size_t pos = input.find_first_not_of(" \t\r\n");
+        if (pos == string::npos)
+        {
+            cout << "Please enter y or n.\n";
+            continue;
+        }
+        char first = static_cast<char>(tolower(static_cast<unsigned char>(input[pos])));
+        if (first == 'y')
+            return true;
+        if (first == 'n')
+            return false;
+        cout << "Please enter y or n.\n";
+    }
+    return false;
+}
+
+// Collect unique, normalized category names from the expense file.
+// Parses lines directly so it does not depend on splitLine or loadExpenses.
+bool loadExistingCategories(vector<string>& categories)
+{
+    categories.clear();
+    ifstream file(EXPENSE_FILE);
+    if (!file)
+        return false;
+
+    string line;
+    while (getline(file, line))
+    {
+        size_t firstPipe = line.find('|');
+        if (firstPipe == string::npos)
+            continue;
+        size_t secondPipe = line.find('|', firstPipe + 1);
+        if (secondPipe == string::npos)
+            continue;
+        string cat = normalizeCategory(
+            line.substr(firstPipe + 1, secondPipe - firstPipe - 1));
+        if (cat.find_first_not_of(" \t\r\n") == string::npos)
+            continue;
+        bool found = false;
+        for (const string& existing : categories)
+        {
+            if (existing == cat)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            categories.push_back(cat);
+    }
+    return true;
+}
+
+// Let the user pick from previously used categories or create a new one.
+bool readCategory(string& category)
+{
+    vector<string> existing;
+    loadExistingCategories(existing);
+
+    if (existing.empty())
+    {
+        if (!readText("Enter category: ", category))
+            return false;
+        category = normalizeCategory(category);
+        return true;
+    }
+
+    cout << "Choose an existing category or create a new one:\n\n";
+    for (size_t i = 0; i < existing.size(); ++i)
+        cout << "  " << (i + 1) << ". " << existing[i] << "\n";
+    cout << "  " << (existing.size() + 1) << ". Create a new category\n"
+         << "  0. Cancel\n";
+
+    if (existing.size() + 1 > static_cast<size_t>(numeric_limits<int>::max()))
+    {
+        if (!readText("Enter category: ", category))
+            return false;
+        category = normalizeCategory(category);
+        return true;
+    }
+
+    int choice;
+    if (!readInteger("Category choice: ", 0,
+                     static_cast<int>(existing.size() + 1), choice)
+        || choice == 0)
+        return false;
+
+    if (choice == static_cast<int>(existing.size() + 1))
+    {
+        if (!readText("Enter new category name: ", category))
+            return false;
+        category = normalizeCategory(category);
+        return true;
+    }
+
+    category = existing[static_cast<size_t>(choice - 1)];
+    return true;
+}
+
 bool parseAmount(const string& input, double& amount)
 {
     istringstream stream(input);
@@ -133,10 +280,26 @@ bool readAmount(double& amount)
 
 bool addExpense(Expense& expense)
 {
-    return readDate(expense.date) &&
-           readText("Enter category: ", expense.category) &&
-           readText("Enter description: ", expense.description) &&
-           readAmount(expense.amount);
+    if (!readDate(expense.date))
+        return false;
+
+    clearScreen();
+    cout << "ADD EXPENSE\n\nDate: " << expense.date << "\n\n";
+    if (!readCategory(expense.category))
+        return false;
+
+    clearScreen();
+    cout << "ADD EXPENSE\n\nDate: " << expense.date << "\nCategory: " << expense.category << "\n\n";
+    if (!readText("Enter description: ", expense.description))
+        return false;
+
+    clearScreen();
+    cout << "ADD EXPENSE\n\nDate: " << expense.date << "\nCategory: " << expense.category
+         << "\nDescription: " << expense.description << "\n\n";
+    if (!readAmount(expense.amount))
+        return false;
+
+    return true;
 }
 
 // Storage precision is separate from the two decimal places used for display.
@@ -473,6 +636,7 @@ void editExpense()
     if (!readInteger("Expense number (0 cancels): ", 0,
                      static_cast<int>(expenses.size()), selection) || selection == 0)
     {
+        clearScreen();
         cout << "Edit cancelled. No changes were saved.\n";
         return;
     }
@@ -491,6 +655,7 @@ void editExpense()
         int field;
         if (!readInteger("Choose a field or action: ", 0, 5, field) || field == 0)
         {
+            clearScreen();
             cout << "Edit cancelled. No changes were saved.\n";
             return;
         }
@@ -502,6 +667,15 @@ void editExpense()
             {
                 clearScreen();
                 cout << "Nothing changed. The file was not rewritten.\n";
+                return;
+            }
+            clearScreen();
+            cout << "Updated expense:\n";
+            displayExpense(edited, static_cast<size_t>(selection));
+            if (!confirmAction("\nSave these changes? (y/n): "))
+            {
+                clearScreen();
+                cout << "Changes discarded. The file was not changed.\n";
                 return;
             }
             clearScreen();
@@ -518,16 +692,29 @@ void editExpense()
         bool inputOK = false;
         switch (field)
         {
-            case 1: inputOK = readDate(edited.date); break;
-            case 2: inputOK = readText("New category: ", edited.category); break;
-            case 3: inputOK = readText("New description: ", edited.description); break;
-            case 4: inputOK = readAmount(edited.amount); break;
+            case 1:
+                clearScreen();
+                cout << "EDIT DATE\n\nCurrent date: " << edited.date << "\n\n";
+                inputOK = readDate(edited.date);
+                break;
+            case 2:
+                clearScreen();
+                cout << "EDIT CATEGORY\n\nCurrent category: " << edited.category << "\n\n";
+                inputOK = readCategory(edited.category);
+                break;
+            case 3:
+                clearScreen();
+                cout << "EDIT DESCRIPTION\n\nCurrent description: " << edited.description << "\n\n";
+                inputOK = readText("New description: ", edited.description);
+                break;
+            case 4:
+                clearScreen();
+                cout << "EDIT AMOUNT\n\nCurrent amount: $" << fixed << setprecision(2) << edited.amount << "\n\n";
+                inputOK = readAmount(edited.amount);
+                break;
         }
         if (!inputOK)
-        {
-            cout << "Input ended. No changes were saved.\n";
-            return;
-        }
+            continue;
     }
 }
 
@@ -584,7 +771,10 @@ void viewPeriodExpenses()
 
     int period;
     if (!readInteger("Choose a period: ", 0, 3, period) || period == 0)
+    {
+        clearScreen();
         return;
+    }
 
     // Collect matching expenses.
     vector<size_t> matches;
@@ -636,6 +826,774 @@ void viewPeriodExpenses()
          << matches.size() << " expense(s) found.\n";
 }
 
+void searchAndFilterExpenses()
+{
+    vector<Expense> expenses;
+    vector<string> originalLines;
+    if (!loadExpenses(expenses, originalLines))
+        return;
+    if (expenses.empty())
+    {
+        cout << "There are no saved expenses yet.\n";
+        return;
+    }
+
+    cout << "1. Search by description\n"
+         << "2. Filter by category\n"
+         << "3. Filter by date range\n"
+         << "4. Filter by amount range\n"
+         << "0. Back to main menu\n";
+
+    int filterType;
+    if (!readInteger("Choose a filter: ", 0, 4, filterType) || filterType == 0)
+    {
+        clearScreen();
+        return;
+    }
+
+    vector<size_t> matches;
+    string filterLabel;
+
+    switch (filterType)
+    {
+        case 1:
+        {
+            clearScreen();
+            cout << "SEARCH BY DESCRIPTION\n\n";
+            string searchTerm;
+            if (!readText("Enter search term: ", searchTerm))
+            {
+                clearScreen();
+                return;
+            }
+            string lowerTerm = toLowerStr(searchTerm);
+            for (size_t i = 0; i < expenses.size(); ++i)
+            {
+                if (toLowerStr(expenses[i].description).find(lowerTerm) != string::npos)
+                    matches.push_back(i);
+            }
+            filterLabel = "Description containing \"" + searchTerm + "\"";
+            break;
+        }
+        case 2:
+        {
+            vector<string> categories;
+            loadExistingCategories(categories);
+            if (categories.empty())
+            {
+                clearScreen();
+                cout << "No categories found in the file.\n";
+                return;
+            }
+            clearScreen();
+            cout << "FILTER BY CATEGORY\n\nChoose a category to filter by:\n\n";
+            for (size_t i = 0; i < categories.size(); ++i)
+                cout << "  " << (i + 1) << ". " << categories[i] << "\n";
+            cout << "  0. Cancel\n";
+
+            if (categories.size() > static_cast<size_t>(numeric_limits<int>::max()))
+            {
+                clearScreen();
+                cout << "Too many categories for this menu.\n";
+                return;
+            }
+
+            int catChoice;
+            if (!readInteger("Category: ", 0,
+                             static_cast<int>(categories.size()), catChoice)
+                || catChoice == 0)
+            {
+                clearScreen();
+                return;
+            }
+
+            string selectedCat = categories[static_cast<size_t>(catChoice - 1)];
+            for (size_t i = 0; i < expenses.size(); ++i)
+            {
+                if (normalizeCategory(expenses[i].category) == selectedCat)
+                    matches.push_back(i);
+            }
+            filterLabel = "Category: " + selectedCat;
+            break;
+        }
+        case 3:
+        {
+            clearScreen();
+            cout << "FILTER BY DATE RANGE\n\nEnter the START date:\n";
+            string startDate;
+            if (!readDate(startDate))
+            {
+                clearScreen();
+                return;
+            }
+            clearScreen();
+            cout << "FILTER BY DATE RANGE\n\nStart date: " << startDate << "\n\nEnter the END date:\n";
+            string endDate;
+            if (!readDate(endDate))
+            {
+                clearScreen();
+                return;
+            }
+
+            int sy, sm, sd, ey, em, ed;
+            if (!parseDate(startDate, sy, sm, sd) ||
+                !parseDate(endDate, ey, em, ed))
+            {
+                clearScreen();
+                cout << "Could not interpret the dates.\n";
+                return;
+            }
+            int startDays = dateToEpochDays(sy, sm, sd);
+            int endDays   = dateToEpochDays(ey, em, ed);
+            if (startDays > endDays)
+            {
+                cout << "The start date is after the end date. Swapping them.\n";
+                swap(startDays, endDays);
+                swap(startDate, endDate);
+            }
+
+            for (size_t i = 0; i < expenses.size(); ++i)
+            {
+                int xy, xm, xd;
+                if (parseDate(expenses[i].date, xy, xm, xd))
+                {
+                    int expDays = dateToEpochDays(xy, xm, xd);
+                    if (expDays >= startDays && expDays <= endDays)
+                        matches.push_back(i);
+                }
+            }
+            filterLabel = "Dates " + startDate + " to " + endDate;
+            break;
+        }
+        case 4:
+        {
+            clearScreen();
+            cout << "FILTER BY AMOUNT RANGE\n\n"
+                 << "Enter the minimum and maximum amounts for the range.\n\n";
+            double minAmt = 0.0, maxAmt = 0.0;
+            string input;
+
+            bool gotMin = false;
+            while (cout << "Enter minimum amount: ", getline(cin, input))
+            {
+                if (parseAmount(input, minAmt))
+                {
+                    gotMin = true;
+                    break;
+                }
+                cout << "Enter a finite number, such as 0.00 or -5.00.\n";
+            }
+            if (!gotMin)
+            {
+                clearScreen();
+                return;
+            }
+
+            clearScreen();
+            cout << "FILTER BY AMOUNT RANGE\n\n"
+                 << "Minimum amount: $" << fixed << setprecision(2) << minAmt << "\n\n";
+
+            bool gotMax = false;
+            while (cout << "Enter maximum amount: ", getline(cin, input))
+            {
+                if (parseAmount(input, maxAmt))
+                {
+                    gotMax = true;
+                    break;
+                }
+                cout << "Enter a finite number, such as 100.00 or 500.00.\n";
+            }
+            if (!gotMax)
+            {
+                clearScreen();
+                return;
+            }
+
+            if (minAmt > maxAmt)
+            {
+                cout << "Minimum is greater than maximum. Swapping them.\n";
+                swap(minAmt, maxAmt);
+            }
+
+            for (size_t i = 0; i < expenses.size(); ++i)
+            {
+                if (expenses[i].amount >= minAmt && expenses[i].amount <= maxAmt)
+                    matches.push_back(i);
+            }
+
+            ostringstream rangeLabel;
+            rangeLabel << fixed << setprecision(2)
+                       << "Amount $" << minAmt << " to $" << maxAmt;
+            filterLabel = rangeLabel.str();
+            break;
+        }
+    }
+
+    clearScreen();
+    cout << "SEARCH RESULTS: " << filterLabel << "\n\n";
+
+    if (matches.empty())
+    {
+        cout << "No matching expenses found.\n";
+        return;
+    }
+
+    double total = 0.0;
+    for (size_t j = 0; j < matches.size(); ++j)
+    {
+        displayExpense(expenses[matches[j]], j + 1);
+        cout << "\n-----------------------------------------------\n\n";
+        total += expenses[matches[j]].amount;
+        if (!isfinite(total))
+        {
+            cout << "The total is too large to represent.\n";
+            return;
+        }
+    }
+
+    cout << matches.size() << " expense(s) found.\n"
+         << "Matching total (including refunds): $" << total << "\n";
+}
+
+bool loadBudgets(vector<Budget>& budgets)
+{
+    budgets.clear();
+    ifstream file(BUDGET_FILE);
+    if (!file)
+        return true;
+
+    string line;
+    while (getline(file, line))
+    {
+        if (line.empty())
+            continue;
+        istringstream stream(line);
+        Budget b;
+        string amtStr;
+        if (getline(stream, b.type, '|') &&
+            getline(stream, b.name, '|') &&
+            getline(stream, amtStr) &&
+            parseAmount(amtStr, b.amount))
+        {
+            budgets.push_back(b);
+        }
+    }
+    return true;
+}
+
+bool saveAllBudgets(const vector<Budget>& budgets)
+{
+    ifstream existingTemp(BUDGET_TEMP_FILE);
+    if (existingTemp)
+    {
+        existingTemp.close();
+        std::remove(BUDGET_TEMP_FILE);
+    }
+
+    ofstream temp(BUDGET_TEMP_FILE, ios::trunc);
+    if (!temp)
+    {
+        cout << "Could not create temporary budget file.\n";
+        return false;
+    }
+
+    for (const Budget& b : budgets)
+    {
+        temp << b.type << '|' << b.name << '|'
+             << setprecision(numeric_limits<double>::max_digits10) << b.amount << '\n';
+    }
+    temp.close();
+    if (!temp)
+    {
+        std::remove(BUDGET_TEMP_FILE);
+        cout << "Could not finish writing budget file.\n";
+        return false;
+    }
+
+    std::remove(BUDGET_BACKUP_FILE);
+    ifstream existingMain(BUDGET_FILE);
+    if (existingMain)
+    {
+        existingMain.close();
+        if (std::rename(BUDGET_FILE, BUDGET_BACKUP_FILE) != 0)
+        {
+            std::remove(BUDGET_TEMP_FILE);
+            cout << "Could not create budget backup file.\n";
+            return false;
+        }
+    }
+
+    if (std::rename(BUDGET_TEMP_FILE, BUDGET_FILE) != 0)
+    {
+        std::rename(BUDGET_BACKUP_FILE, BUDGET_FILE);
+        std::remove(BUDGET_TEMP_FILE);
+        cout << "Could not save budget file. Rolled back.\n";
+        return false;
+    }
+    return true;
+}
+
+double calculateTimeframeSpent(const vector<Expense>& expenses, const string& timeframe, const string& today)
+{
+    double total = 0.0;
+    for (const Expense& e : expenses)
+    {
+        bool match = false;
+        if (timeframe == "WEEK")
+            match = isInCurrentWeek(e.date, today);
+        else if (timeframe == "MONTH")
+            match = isInCurrentMonth(e.date, today);
+        else if (timeframe == "YEAR")
+            match = isInCurrentYear(e.date, today);
+
+        if (match)
+            total += e.amount;
+    }
+    return total;
+}
+
+double calculateCategorySpent(const vector<Expense>& expenses, const string& categoryName)
+{
+    double total = 0.0;
+    for (const Expense& e : expenses)
+    {
+        if (normalizeCategory(e.category) == categoryName)
+            total += e.amount;
+    }
+    return total;
+}
+
+void displayBudgetComparison(double budgetAmount, double spentAmount, const string& label)
+{
+    cout << "Budget:       $" << fixed << setprecision(2) << budgetAmount << "\n"
+         << "Amount Spent: $" << spentAmount << "\n";
+    if (spentAmount <= budgetAmount)
+    {
+        double remaining = budgetAmount - spentAmount;
+        cout << "Status:       You still have $" << remaining
+             << " remaining for " << label << ".\n";
+    }
+    else
+    {
+        double exceeded = spentAmount - budgetAmount;
+        cout << "Status:       ALERT! You have exceeded your budget by $"
+             << exceeded << " for " << label << "!\n";
+    }
+}
+
+bool readBudgetAmount(const string& prompt, double& amount)
+{
+    string input;
+    while (cout << prompt, getline(cin, input))
+    {
+        size_t pos = input.find_first_not_of(" \t\r\n");
+        if (pos == string::npos)
+        {
+            cout << "Enter a positive number, such as 50.00 or 200.00 (0 cancels).\n";
+            continue;
+        }
+        double candidate;
+        if (parseAmount(input, candidate))
+        {
+            if (candidate == 0.0)
+            {
+                amount = 0.0;
+                return true;
+            }
+            if (candidate > 0.0)
+            {
+                amount = candidate;
+                return true;
+            }
+        }
+        cout << "Enter a positive number, such as 50.00 or 200.00 (0 cancels).\n";
+    }
+    return false;
+}
+
+void viewBudgetStatus(const vector<Expense>& expenses, const vector<Budget>& budgets, const string& today)
+{
+    clearScreen();
+    cout << "BUDGET STATUS\n\n";
+
+    if (budgets.empty())
+    {
+        cout << "No budgets have been set yet.\n"
+             << "Choose option 2 or 3 from the Budget Management menu to set a budget.\n";
+        return;
+    }
+
+    bool hasTimeframe = false;
+    cout << "--- TIMEFRAME BUDGETS ---\n\n";
+    const char* const tfKeys[] = {"WEEK", "MONTH", "YEAR"};
+    const char* const tfNames[] = {"This Week", "This Month", "This Year"};
+    for (int i = 0; i < 3; ++i)
+    {
+        for (const Budget& b : budgets)
+        {
+            if (b.type == "TIMEFRAME" && b.name == tfKeys[i])
+            {
+                hasTimeframe = true;
+                cout << "[" << tfNames[i] << "]\n";
+                double spent = calculateTimeframeSpent(expenses, tfKeys[i], today);
+                displayBudgetComparison(b.amount, spent, tfNames[i]);
+                cout << "-----------------------------------------------\n\n";
+                break;
+            }
+        }
+    }
+    if (!hasTimeframe)
+        cout << "No timeframe budgets set.\n\n";
+
+    bool hasCategory = false;
+    cout << "--- CATEGORY BUDGETS ---\n\n";
+    for (const Budget& b : budgets)
+    {
+        if (b.type == "CATEGORY")
+        {
+            hasCategory = true;
+            cout << "[Category: " << b.name << "]\n";
+            double spent = calculateCategorySpent(expenses, b.name);
+            displayBudgetComparison(b.amount, spent, b.name);
+            cout << "-----------------------------------------------\n\n";
+        }
+    }
+    if (!hasCategory)
+        cout << "No category budgets set.\n";
+}
+
+void setTimeframeBudget(const vector<Expense>& expenses, vector<Budget>& budgets, const string& today)
+{
+    clearScreen();
+    cout << "SET TIMEFRAME BUDGET\n\n"
+         << "1. Weekly Budget   (This Week)\n"
+         << "2. Monthly Budget  (This Month)\n"
+         << "3. Yearly Budget   (This Year)\n"
+         << "0. Cancel\n";
+
+    int choice;
+    if (!readInteger("Choose a timeframe: ", 0, 3, choice) || choice == 0)
+    {
+        clearScreen();
+        return;
+    }
+
+    string tfKey;
+    string tfLabel;
+    switch (choice)
+    {
+        case 1: tfKey = "WEEK";  tfLabel = "This Week";  break;
+        case 2: tfKey = "MONTH"; tfLabel = "This Month"; break;
+        case 3: tfKey = "YEAR";  tfLabel = "This Year";  break;
+    }
+
+    clearScreen();
+    cout << "SET BUDGET: " << tfLabel << "\n\n";
+
+    double currentBudget = 0.0;
+    bool hadBudget = false;
+    int budgetIdx = -1;
+    for (size_t i = 0; i < budgets.size(); ++i)
+    {
+        if (budgets[i].type == "TIMEFRAME" && budgets[i].name == tfKey)
+        {
+            currentBudget = budgets[i].amount;
+            hadBudget = true;
+            budgetIdx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    double currentSpent = calculateTimeframeSpent(expenses, tfKey, today);
+    if (hadBudget)
+        cout << "Current budget:      $" << fixed << setprecision(2) << currentBudget << "\n";
+    else
+        cout << "Current budget:      None\n";
+    cout << "Amount spent so far: $" << fixed << setprecision(2) << currentSpent << "\n\n";
+
+    double newAmount = 0.0;
+    if (!readBudgetAmount("Enter new budget amount (0 cancels): $", newAmount) || newAmount == 0.0)
+    {
+        clearScreen();
+        cout << "Budget update cancelled. No changes were made.\n";
+        return;
+    }
+
+    clearScreen();
+    cout << "Confirm " << tfLabel << " Budget:\n\n"
+         << "New Budget Amount:   $" << fixed << setprecision(2) << newAmount << "\n"
+         << "Amount spent so far: $" << currentSpent << "\n\n";
+    if (!confirmAction("Save this budget? (y/n): "))
+    {
+        clearScreen();
+        cout << "Budget update cancelled. No changes were made.\n";
+        return;
+    }
+
+    if (hadBudget && budgetIdx >= 0)
+        budgets[static_cast<size_t>(budgetIdx)].amount = newAmount;
+    else
+    {
+        Budget b;
+        b.type = "TIMEFRAME";
+        b.name = tfKey;
+        b.amount = newAmount;
+        budgets.push_back(b);
+    }
+
+    clearScreen();
+    if (saveAllBudgets(budgets))
+    {
+        cout << tfLabel << " budget set to $" << fixed << setprecision(2) << newAmount << " successfully!\n\n";
+        displayBudgetComparison(newAmount, currentSpent, tfLabel);
+    }
+}
+
+void setCategoryBudget(const vector<Expense>& expenses, vector<Budget>& budgets)
+{
+    clearScreen();
+    cout << "SET CATEGORY BUDGET\n\n";
+
+    vector<string> categories;
+    loadExistingCategories(categories);
+
+    for (const Budget& b : budgets)
+    {
+        if (b.type == "CATEGORY")
+        {
+            bool found = false;
+            for (const string& c : categories)
+            {
+                if (c == b.name)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                categories.push_back(b.name);
+        }
+    }
+
+    cout << "Choose a category to set a budget for:\n\n";
+    for (size_t i = 0; i < categories.size(); ++i)
+        cout << "  " << (i + 1) << ". " << categories[i] << "\n";
+    cout << "  " << (categories.size() + 1) << ". Enter a custom category name\n"
+         << "  0. Cancel\n";
+
+    int choice;
+    if (!readInteger("Category choice: ", 0,
+                     static_cast<int>(categories.size() + 1), choice)
+        || choice == 0)
+    {
+        clearScreen();
+        return;
+    }
+
+    string categoryName;
+    if (choice == static_cast<int>(categories.size() + 1))
+    {
+        clearScreen();
+        cout << "SET CATEGORY BUDGET\n\n";
+        if (!readText("Enter category name: ", categoryName))
+        {
+            clearScreen();
+            return;
+        }
+        categoryName = normalizeCategory(categoryName);
+    }
+    else
+    {
+        categoryName = categories[static_cast<size_t>(choice - 1)];
+    }
+
+    clearScreen();
+    cout << "SET BUDGET: " << categoryName << "\n\n";
+
+    double currentBudget = 0.0;
+    bool hadBudget = false;
+    int budgetIdx = -1;
+    for (size_t i = 0; i < budgets.size(); ++i)
+    {
+        if (budgets[i].type == "CATEGORY" && budgets[i].name == categoryName)
+        {
+            currentBudget = budgets[i].amount;
+            hadBudget = true;
+            budgetIdx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    double currentSpent = calculateCategorySpent(expenses, categoryName);
+    if (hadBudget)
+        cout << "Current budget:      $" << fixed << setprecision(2) << currentBudget << "\n";
+    else
+        cout << "Current budget:      None\n";
+    cout << "Total spent so far:  $" << fixed << setprecision(2) << currentSpent << "\n\n";
+
+    double newAmount = 0.0;
+    if (!readBudgetAmount("Enter budget amount for " + categoryName + " (0 cancels): $", newAmount)
+        || newAmount == 0.0)
+    {
+        clearScreen();
+        cout << "Budget update cancelled. No changes were made.\n";
+        return;
+    }
+
+    clearScreen();
+    cout << "Confirm Category Budget:\n\n"
+         << "Category:            " << categoryName << "\n"
+         << "New Budget Amount:   $" << fixed << setprecision(2) << newAmount << "\n"
+         << "Total spent so far:  $" << currentSpent << "\n\n";
+    if (!confirmAction("Save this budget? (y/n): "))
+    {
+        clearScreen();
+        cout << "Budget update cancelled. No changes were made.\n";
+        return;
+    }
+
+    if (hadBudget && budgetIdx >= 0)
+        budgets[static_cast<size_t>(budgetIdx)].amount = newAmount;
+    else
+    {
+        Budget b;
+        b.type = "CATEGORY";
+        b.name = categoryName;
+        b.amount = newAmount;
+        budgets.push_back(b);
+    }
+
+    clearScreen();
+    if (saveAllBudgets(budgets))
+    {
+        cout << "Budget for " << categoryName << " set to $" << fixed << setprecision(2) << newAmount << " successfully!\n\n";
+        displayBudgetComparison(newAmount, currentSpent, categoryName);
+    }
+}
+
+void removeBudget(vector<Budget>& budgets)
+{
+    clearScreen();
+    cout << "REMOVE A BUDGET\n\n";
+
+    if (budgets.empty())
+    {
+        cout << "No budgets are currently set.\n";
+        return;
+    }
+
+    cout << "Choose a budget to remove:\n\n";
+    for (size_t i = 0; i < budgets.size(); ++i)
+    {
+        string label;
+        if (budgets[i].type == "TIMEFRAME")
+        {
+            if (budgets[i].name == "WEEK") label = "Weekly Budget (This Week)";
+            else if (budgets[i].name == "MONTH") label = "Monthly Budget (This Month)";
+            else if (budgets[i].name == "YEAR") label = "Yearly Budget (This Year)";
+            else label = budgets[i].name;
+        }
+        else
+        {
+            label = "Category: " + budgets[i].name;
+        }
+        cout << "  " << (i + 1) << ". " << label
+             << " ($" << fixed << setprecision(2) << budgets[i].amount << ")\n";
+    }
+    cout << "  0. Cancel\n";
+
+    int choice;
+    if (!readInteger("Choice: ", 0, static_cast<int>(budgets.size()), choice) || choice == 0)
+    {
+        clearScreen();
+        return;
+    }
+
+    size_t idx = static_cast<size_t>(choice - 1);
+    string removedLabel;
+    if (budgets[idx].type == "TIMEFRAME")
+    {
+        if (budgets[idx].name == "WEEK") removedLabel = "Weekly Budget (This Week)";
+        else if (budgets[idx].name == "MONTH") removedLabel = "Monthly Budget (This Month)";
+        else if (budgets[idx].name == "YEAR") removedLabel = "Yearly Budget (This Year)";
+        else removedLabel = budgets[idx].name;
+    }
+    else
+    {
+        removedLabel = "Category: " + budgets[idx].name;
+    }
+    double removedAmt = budgets[idx].amount;
+
+    clearScreen();
+    cout << "Remove " << removedLabel << " ($" << fixed << setprecision(2) << removedAmt << ")?\n";
+    if (!confirmAction("Are you sure? (y/n): "))
+    {
+        clearScreen();
+        cout << "Budget removal cancelled. No changes were made.\n";
+        return;
+    }
+
+    budgets.erase(budgets.begin() + static_cast<ptrdiff_t>(idx));
+    clearScreen();
+    if (saveAllBudgets(budgets))
+        cout << "Budget removed successfully.\n";
+}
+
+void manageBudgets()
+{
+    vector<Expense> expenses;
+    vector<string> originalLines;
+    loadExpenses(expenses, originalLines);
+
+    vector<Budget> budgets;
+    if (!loadBudgets(budgets))
+        return;
+
+    string today = getTodayDate();
+
+    while (true)
+    {
+        clearScreen();
+        cout << "BUDGET MANAGEMENT\n\n"
+             << "1. View Budget Status\n"
+             << "2. Set / Update Timeframe Budget\n"
+             << "3. Set / Update Category Budget\n"
+             << "4. Remove a Budget\n"
+             << "0. Back to main menu\n";
+
+        int option;
+        if (!readInteger("Choose an option: ", 0, 4, option) || option == 0)
+        {
+            clearScreen();
+            return;
+        }
+
+        switch (option)
+        {
+            case 1:
+                viewBudgetStatus(expenses, budgets, today);
+                break;
+            case 2:
+                setTimeframeBudget(expenses, budgets, today);
+                break;
+            case 3:
+                setCategoryBudget(expenses, budgets);
+                break;
+            case 4:
+                removeBudget(budgets);
+                break;
+        }
+
+        cout << "\nPress Enter to return to the Budget Management menu..." << flush;
+        string pauseInput;
+        if (!getline(cin, pauseInput))
+        {
+            clearScreen();
+            return;
+        }
+    }
+}
+
 int main()
 {
     cout << fixed << setprecision(2);
@@ -655,9 +1613,10 @@ int main()
         clearScreen();
         cout << "DARREN'S STUDENT EXPENSE TRACKER\n\nPlease choose an option\n"
              << "1. Add Expense\n2. View Expenses\n3. View Total Spending\n"
-             << "4. Edit Expense\n5. View Spending by Time Period\n6. Exit\n";
+             << "4. Edit Expense\n5. View Spending by Time Period\n"
+             << "6. Search & Filter Expenses\n7. Budget Management\n8. Exit\n";
         int option;
-        if (!readInteger("Option: ", 1, 6, option))
+        if (!readInteger("Option: ", 1, 8, option))
         {
             cout << "\nInput ended. Goodbye!\n";
             return 0;
@@ -671,8 +1630,18 @@ int main()
                 Expense expense;
                 if (!addExpense(expense))
                 {
-                    cout << "\nInput ended. The expense was not saved.\n";
-                    return 0;
+                    clearScreen();
+                    cout << "\nExpense cancelled. Returning to the main menu.\n";
+                    break;
+                }
+                clearScreen();
+                cout << "Review your expense:\n";
+                displayExpense(expense, 0);
+                if (!confirmAction("\nSave this expense? (y/n): "))
+                {
+                    clearScreen();
+                    cout << "Expense discarded. Nothing was saved.\n";
+                    break;
                 }
                 clearScreen();
                 if (saveExpense(expense))
@@ -708,6 +1677,13 @@ int main()
                 viewPeriodExpenses();
                 break;
             case 6:
+                cout << "SEARCH & FILTER EXPENSES\n\n";
+                searchAndFilterExpenses();
+                break;
+            case 7:
+                manageBudgets();
+                break;
+            case 8:
                 cout << "You have chosen to exit, hope to see you soon!\n";
                 return 0;
         }
