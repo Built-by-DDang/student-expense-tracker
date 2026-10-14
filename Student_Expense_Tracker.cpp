@@ -6,6 +6,7 @@
 #include <vector>
 #include <iomanip>
 #include <cmath>
+#include <ctime>
 #include <cstdio>
 #include <cerrno>
 #include <cstdlib>
@@ -267,6 +268,82 @@ void displayExpense(const Expense& expense, size_t number)
          << "Amount: $" << fixed << setprecision(2) << expense.amount << '\n';
 }
 
+// Returns today's local date as "YYYY-MM-DD".
+string getTodayDate()
+{
+    time_t now = time(nullptr);
+    tm* local = localtime(&now);
+    if (!local)
+        return "0000-00-00";
+    ostringstream oss;
+    oss << setfill('0') << setw(4) << (local->tm_year + 1900) << '-'
+        << setw(2) << (local->tm_mon + 1) << '-'
+        << setw(2) << local->tm_mday;
+    return oss.str();
+}
+
+// Extracts year, month, day integers from a "YYYY-MM-DD" string.
+bool parseDate(const string& date, int& year, int& month, int& day)
+{
+    if (date.size() < 10 || date[4] != '-' || date[7] != '-')
+        return false;
+    istringstream y(date.substr(0, 4));
+    istringstream m(date.substr(5, 2));
+    istringstream d(date.substr(8, 2));
+    return (y >> year) && (m >> month) && (d >> day);
+}
+
+// Convert a civil date to a linear day count for date arithmetic.
+int dateToEpochDays(int year, int month, int day)
+{
+    year -= (month <= 2);
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const int yoe = year - era * 400;
+    const int doy = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
+    const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe;
+}
+
+// Returns 0 = Monday, 1 = Tuesday, ... 6 = Sunday.
+int dayOfWeek(int year, int month, int day)
+{
+    tm t = {};
+    t.tm_year = year - 1900;
+    t.tm_mon  = month - 1;
+    t.tm_mday = day;
+    mktime(&t);
+    return (t.tm_wday + 6) % 7;
+}
+
+// True when the expense date falls in the same Mon-Sun week as today.
+bool isInCurrentWeek(const string& expenseDate, const string& todayDate)
+{
+    int ey, em, ed, ty, tmo, td;
+    if (!parseDate(expenseDate, ey, em, ed) || !parseDate(todayDate, ty, tmo, td))
+        return false;
+    int todayDow = dayOfWeek(ty, tmo, td);
+    int diff = dateToEpochDays(ey, em, ed) - dateToEpochDays(ty, tmo, td);
+    return diff >= -todayDow && diff <= (6 - todayDow);
+}
+
+// True when the expense date is in the same calendar month and year as today.
+bool isInCurrentMonth(const string& expenseDate, const string& todayDate)
+{
+    int ey, em, ed, ty, tmo, td;
+    if (!parseDate(expenseDate, ey, em, ed) || !parseDate(todayDate, ty, tmo, td))
+        return false;
+    return ey == ty && em == tmo;
+}
+
+// True when the expense date is in the same calendar year as today.
+bool isInCurrentYear(const string& expenseDate, const string& todayDate)
+{
+    int ey, em, ed, ty, tmo, td;
+    if (!parseDate(expenseDate, ey, em, ed) || !parseDate(todayDate, ty, tmo, td))
+        return false;
+    return ey == ty;
+}
+
 void viewExpense()
 {
     vector<Expense> expenses;
@@ -454,6 +531,111 @@ void editExpense()
     }
 }
 
+void viewPeriodExpenses()
+{
+    vector<Expense> expenses;
+    vector<string> originalLines;
+    if (!loadExpenses(expenses, originalLines))
+        return;
+    if (expenses.empty())
+    {
+        cout << "There are no saved expenses yet.\n";
+        return;
+    }
+
+    string today = getTodayDate();
+    int ty, tmo, td;
+    if (!parseDate(today, ty, tmo, td))
+    {
+        cout << "Could not determine today's date.\n";
+        return;
+    }
+
+    // Compute Monday and Sunday of the current week for the sub-menu display.
+    int todayDow = dayOfWeek(ty, tmo, td);
+    tm monTm = {};
+    monTm.tm_year = ty - 1900;
+    monTm.tm_mon  = tmo - 1;
+    monTm.tm_mday = td - todayDow;
+    mktime(&monTm);
+    tm sunTm = {};
+    sunTm.tm_year = ty - 1900;
+    sunTm.tm_mon  = tmo - 1;
+    sunTm.tm_mday = td + (6 - todayDow);
+    mktime(&sunTm);
+
+    ostringstream monStr, sunStr;
+    monStr << setfill('0') << setw(4) << (monTm.tm_year + 1900) << '-'
+           << setw(2) << (monTm.tm_mon + 1) << '-' << setw(2) << monTm.tm_mday;
+    sunStr << setfill('0') << setw(4) << (sunTm.tm_year + 1900) << '-'
+           << setw(2) << (sunTm.tm_mon + 1) << '-' << setw(2) << sunTm.tm_mday;
+
+    const char* const monthNames[] =
+    {
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    };
+
+    cout << "Today's date: " << today << "\n\n"
+         << "1. This Week   (" << monStr.str() << " to " << sunStr.str() << ")\n"
+         << "2. This Month  (" << monthNames[tmo - 1] << " " << ty << ")\n"
+         << "3. This Year   (" << ty << ")\n"
+         << "0. Back to main menu\n";
+
+    int period;
+    if (!readInteger("Choose a period: ", 0, 3, period) || period == 0)
+        return;
+
+    // Collect matching expenses.
+    vector<size_t> matches;
+    for (size_t i = 0; i < expenses.size(); ++i)
+    {
+        bool match = false;
+        switch (period)
+        {
+            case 1: match = isInCurrentWeek(expenses[i].date, today);  break;
+            case 2: match = isInCurrentMonth(expenses[i].date, today); break;
+            case 3: match = isInCurrentYear(expenses[i].date, today);  break;
+        }
+        if (match)
+            matches.push_back(i);
+    }
+
+    string periodLabel;
+    switch (period)
+    {
+        case 1: periodLabel = "This Week (" + monStr.str() + " to " + sunStr.str() + ")"; break;
+        case 2: periodLabel = string("This Month (") + monthNames[tmo - 1] + " " + to_string(ty) + ")"; break;
+        case 3: periodLabel = "This Year (" + to_string(ty) + ")"; break;
+    }
+
+    clearScreen();
+    cout << "SPENDING: " << periodLabel << "\n\n";
+
+    if (matches.empty())
+    {
+        cout << "No expenses found for this period.\n"
+             << "Period total: $0.00\n";
+        return;
+    }
+
+    double total = 0.0;
+    for (size_t j = 0; j < matches.size(); ++j)
+    {
+        displayExpense(expenses[matches[j]], j + 1);
+        cout << "\n-----------------------------------------------\n\n";
+        total += expenses[matches[j]].amount;
+        if (!isfinite(total))
+        {
+            cout << "The total is too large to represent.\n";
+            return;
+        }
+    }
+
+    cout << "Period total (including refunds): $" << total << "\n"
+         << matches.size() << " expense(s) found.\n";
+}
+
 int main()
 {
     cout << fixed << setprecision(2);
@@ -473,9 +655,9 @@ int main()
         clearScreen();
         cout << "DARREN'S STUDENT EXPENSE TRACKER\n\nPlease choose an option\n"
              << "1. Add Expense\n2. View Expenses\n3. View Total Spending\n"
-             << "4. Edit Expense\n5. Exit\n";
+             << "4. Edit Expense\n5. View Spending by Time Period\n6. Exit\n";
         int option;
-        if (!readInteger("Option: ", 1, 5, option))
+        if (!readInteger("Option: ", 1, 6, option))
         {
             cout << "\nInput ended. Goodbye!\n";
             return 0;
@@ -522,6 +704,10 @@ int main()
                 editExpense();
                 break;
             case 5:
+                cout << "SPENDING BY TIME PERIOD\n\n";
+                viewPeriodExpenses();
+                break;
+            case 6:
                 cout << "You have chosen to exit, hope to see you soon!\n";
                 return 0;
         }
